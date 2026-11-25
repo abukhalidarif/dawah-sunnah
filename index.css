@@ -1,0 +1,78 @@
+@import "tailwindcss";
+@custom-variant dark (&:where(.dark, .dark *));
+
+@layer base {
+  :root {
+    --font-bengali-main: 'Noto Serif Bengali', 'Noto Sans Bengali', 'Plus Jakarta Sans', serif;
+    --font-bengali-sans: 'Noto Sans Bengali', 'Plus Jakarta Sans', system-ui, sans-serif;
+    --font-bengali-serif: 'Noto Serif Bengali', 'Noto Sans Bengali', serif;
+    --font-arabic: 'Amiri', serif;
+  }
+
+  html,
+  body,
+  input,
+  textarea,
+  select,
+  button {
+    font-family: var(--font-bengali-main);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  html {
+    scroll-behavior: smooth;
+  }
+
+  h1, h2, h3, h4, .font-editorial {
+    font-family: var(--font-bengali-serif);
+    text-wrap: balance;
+  }
+}
+
+.font-serif-bn {
+  font-family: 'Noto Serif Bengali', 'Noto Sans Bengali', serif;
+}
+
+.font-sans-bn {
+  font-family: 'Noto Sans Bengali', 'Plus Jakarta Sans', system-ui, sans-serif;
+}
+
+.font-brand-bn {
+  font-family: 'Galada', 'Noto Serif Bengali', cursive, serif;
+  font-weight: 400;
+}
+
+.font-arabic {
+  font-family: 'Amiri', serif;
+  direction: rtl;
+  unicode-bidi: isolate;
+  line-height: 2.1;
+}
+
+.tabular-nums-bn {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Warm Golden & Cream Islamic Hero Background */
+.islamic-lattice-bg {
+  background-image:
+    radial-gradient(circle at 20% 20%, rgba(173, 130, 62, 0.1) 0%, transparent 45%),
+    radial-gradient(circle at 80% 10%, rgba(212, 167, 94, 0.14) 0%, transparent 48%),
+    linear-gradient(180deg, #FAF6EF 0%, #F4EAD8 100%);
+}
+
+.dark .islamic-lattice-bg {
+  background-image:
+    radial-gradient(circle at 20% 20%, rgba(173, 130, 62, 0.08) 0%, transparent 45%),
+    radial-gradient(circle at 80% 10%, rgba(212, 167, 94, 0.07) 0%, transparent 48%),
+    linear-gradient(180deg, #120F0B 0%, #19140E 100%);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
