@@ -1,0 +1,639 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Global Safety Net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Core Primitives
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+    function isValidEmailId(id) {
+      return id is string && id.size() >= 3 && id.size() <= 200 && id.matches('^[a-zA-Z0-9._%+\\-]+@[a-zA-Z0-9.\\-]+\\.[a-zA-Z]{2,}$');
+    }
+    function incoming() {
+      return request.resource.data;
+    }
+    function existing() {
+      return resource.data;
+    }
+    function isSignedIn() {
+      return request.auth != null;
+    }
+    function isVerifiedUser() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+    function isBootstrapSuperAdmin() {
+      return isVerifiedUser() && request.auth.token.email == 'dawah.bd.21@gmail.com';
+    }
+    function hasRoleDoc() {
+      return exists(/databases/$(database)/documents/user_roles/$(request.auth.uid));
+    }
+    function getRole() {
+      return get(/databases/$(database)/documents/user_roles/$(request.auth.uid)).data.role;
+    }
+    function hasEmailInvite() {
+      return isVerifiedUser()
+        && ('email' in request.auth.token)
+        && request.auth.token.email is string
+        && exists(/databases/$(database)/documents/admin_invites/$(request.auth.token.email));
+    }
+    function getEmailInviteRole() {
+      return get(/databases/$(database)/documents/admin_invites/$(request.auth.token.email)).data.role;
+    }
+    function isSuperAdmin() {
+      return isBootstrapSuperAdmin()
+        || (isVerifiedUser() && hasRoleDoc() && getRole() == 'super_admin')
+        || (hasEmailInvite() && getEmailInviteRole() == 'super_admin');
+    }
+    function isAdmin() {
+      return isSuperAdmin()
+        || (isVerifiedUser() && hasRoleDoc() && getRole() in ['super_admin', 'admin'])
+        || (hasEmailInvite() && getEmailInviteRole() in ['super_admin', 'admin']);
+    }
+    function isStaff() {
+      return isSuperAdmin()
+        || (isVerifiedUser() && hasRoleDoc() && getRole() in ['super_admin', 'admin', 'editor'])
+        || (hasEmailInvite() && getEmailInviteRole() in ['super_admin', 'admin', 'editor']);
+    }
+
+    // Validation Helpers (Eight Pillars)
+    function isValidUserProfile(data) {
+      return data.keys().hasAll(['uid', 'displayName', 'email', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'displayName', 'email', 'photoURL', 'bio', 'createdAt', 'updatedAt'])
+        && isValidId(data.uid)
+        && data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 120
+        && data.email is string && data.email.size() >= 3 && data.email.size() <= 200
+        && (!('photoURL' in data) || (data.photoURL is string && data.photoURL.size() <= 250000))
+        && (!('bio' in data) || (data.bio is string && data.bio.size() <= 500))
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidUserRole(data) {
+      return data.keys().hasAll(['uid', 'email', 'role', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'email', 'role', 'assignedBy', 'updatedAt'])
+        && isValidId(data.uid)
+        && data.email is string && data.email.size() >= 3 && data.email.size() <= 200
+        && data.role in ['super_admin', 'admin', 'editor', 'user']
+        && (!('assignedBy' in data) || (data.assignedBy is string && data.assignedBy.size() <= 128))
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidAdminInvite(data) {
+      return data.keys().hasAll(['email', 'role', 'assignedBy', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['email', 'role', 'note', 'assignedBy', 'assignedByEmail', 'createdAt', 'updatedAt'])
+        && isValidEmailId(data.email)
+        && data.role in ['super_admin', 'admin', 'editor']
+        && (!('note' in data) || (data.note is string && data.note.size() <= 150))
+        && isValidId(data.assignedBy)
+        && (!('assignedByEmail' in data) || (data.assignedByEmail is string && data.assignedByEmail.size() <= 200))
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidCategory(data) {
+      return data.keys().hasAll(['id', 'name', 'slug', 'type', 'order', 'isActive', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'name', 'slug', 'description', 'type', 'icon', 'order', 'isActive', 'createdAt', 'updatedAt'])
+        && isValidId(data.id)
+        && data.name is string && data.name.size() >= 1 && data.name.size() <= 120
+        && data.slug is string && data.slug.size() >= 1 && data.slug.size() <= 140
+        && (!('description' in data) || (data.description is string && data.description.size() <= 600))
+        && data.type in ['both', 'article', 'question']
+        && (!('icon' in data) || (data.icon is string && data.icon.size() <= 60))
+        && data.order is number && data.order >= 0 && data.order <= 10000
+        && data.isActive is bool
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidAuthor(data) {
+      return data.keys().hasAll(['id', 'name', 'slug', 'bio', 'qualifications', 'isActive', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'name', 'title', 'slug', 'photoURL', 'bio', 'qualifications', 'specialties', 'totalPublications', 'isActive', 'createdAt', 'updatedAt'])
+        && isValidId(data.id)
+        && data.name is string && data.name.size() >= 1 && data.name.size() <= 150
+        && (!('title' in data) || (data.title is string && data.title.size() <= 150))
+        && data.slug is string && data.slug.size() >= 1 && data.slug.size() <= 160
+        && (!('photoURL' in data) || (data.photoURL is string && data.photoURL.size() <= 250000))
+        && data.bio is string && data.bio.size() >= 1 && data.bio.size() <= 3000
+        && data.qualifications is string && data.qualifications.size() >= 1 && data.qualifications.size() <= 1500
+        && (!('specialties' in data) || (data.specialties is string && data.specialties.size() <= 500))
+        && (!('totalPublications' in data) || (data.totalPublications is number && data.totalPublications >= 0))
+        && data.isActive is bool
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidArticle(data) {
+      return data.keys().hasAll(['id', 'title', 'slug', 'excerpt', 'content', 'categoryId', 'categoryName', 'authorId', 'authorName', 'status', 'isFeatured', 'readingTimeMinutes', 'viewCount', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'title', 'slug', 'excerpt', 'content', 'arabicQuote', 'quranHadithRefs', 'coverImage', 'categoryId', 'categoryName', 'authorId', 'authorName', 'status', 'isFeatured', 'readingTimeMinutes', 'viewCount', 'publishedAt', 'createdAt', 'updatedAt'])
+        && isValidId(data.id)
+        && data.title is string && data.title.size() >= 2 && data.title.size() <= 240
+        && data.slug is string && data.slug.size() >= 1 && data.slug.size() <= 240
+        && data.excerpt is string && data.excerpt.size() >= 1 && data.excerpt.size() <= 600
+        && data.content is string && data.content.size() >= 10 && data.content.size() <= 60000
+        && (!('arabicQuote' in data) || (data.arabicQuote is string && data.arabicQuote.size() <= 4000))
+        && (!('quranHadithRefs' in data) || (data.quranHadithRefs is string && data.quranHadithRefs.size() <= 2000))
+        && (!('coverImage' in data) || (data.coverImage is string && data.coverImage.size() <= 250000))
+        && isValidId(data.categoryId)
+        && data.categoryName is string && data.categoryName.size() >= 1 && data.categoryName.size() <= 120
+        && isValidId(data.authorId)
+        && data.authorName is string && data.authorName.size() >= 1 && data.authorName.size() <= 150
+        && data.status in ['published', 'draft']
+        && data.isFeatured is bool
+        && data.readingTimeMinutes is number && data.readingTimeMinutes >= 1 && data.readingTimeMinutes <= 180
+        && data.viewCount is number && data.viewCount >= 0
+        && (!('publishedAt' in data) || data.publishedAt is timestamp)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidQuestion(data) {
+      return data.keys().hasAll(['id', 'title', 'slug', 'questionText', 'askerName', 'categoryId', 'categoryName', 'status', 'isFeatured', 'viewCount', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'title', 'slug', 'questionText', 'askerName', 'categoryId', 'categoryName', 'status', 'isFeatured', 'answerText', 'arabicReferences', 'quranHadithRefs', 'authorId', 'authorName', 'viewCount', 'submittedByUid', 'answeredAt', 'createdAt', 'updatedAt'])
+        && isValidId(data.id)
+        && data.title is string && data.title.size() >= 3 && data.title.size() <= 260
+        && data.slug is string && data.slug.size() >= 1 && data.slug.size() <= 260
+        && data.questionText is string && data.questionText.size() >= 5 && data.questionText.size() <= 10000
+        && data.askerName is string && data.askerName.size() >= 1 && data.askerName.size() <= 120
+        && isValidId(data.categoryId)
+        && data.categoryName is string && data.categoryName.size() >= 1 && data.categoryName.size() <= 120
+        && data.status in ['pending', 'approved', 'rejected', 'published']
+        && data.isFeatured is bool
+        && (!('answerText' in data) || (data.answerText is string && data.answerText.size() <= 30000))
+        && (!('arabicReferences' in data) || (data.arabicReferences is string && data.arabicReferences.size() <= 5000))
+        && (!('quranHadithRefs' in data) || (data.quranHadithRefs is string && data.quranHadithRefs.size() <= 3000))
+        && (!('authorId' in data) || (data.authorId is string && data.authorId.size() <= 128))
+        && (!('authorName' in data) || (data.authorName is string && data.authorName.size() <= 150))
+        && data.viewCount is number && data.viewCount >= 0
+        && (!('submittedByUid' in data) || (data.submittedByUid is string && data.submittedByUid.size() <= 128))
+        && (!('answeredAt' in data) || data.answeredAt is timestamp)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidQuestionContact(data) {
+      return data.keys().hasAll(['questionId', 'contactInfo', 'createdAt'])
+        && data.keys().hasOnly(['questionId', 'contactInfo', 'submittedByUid', 'createdAt'])
+        && isValidId(data.questionId)
+        && data.contactInfo is string && data.contactInfo.size() >= 1 && data.contactInfo.size() <= 200
+        && (!('submittedByUid' in data) || (data.submittedByUid is string && data.submittedByUid.size() <= 128))
+        && data.createdAt is timestamp;
+    }
+
+    function isValidBookmark(data) {
+      return data.keys().hasAll(['id', 'userId', 'itemId', 'itemType', 'title', 'slug', 'createdAt'])
+        && data.keys().hasOnly(['id', 'userId', 'itemId', 'itemType', 'title', 'slug', 'categoryName', 'createdAt'])
+        && isValidId(data.id)
+        && isValidId(data.userId)
+        && isValidId(data.itemId)
+        && data.itemType in ['article', 'question']
+        && data.title is string && data.title.size() >= 1 && data.title.size() <= 260
+        && data.slug is string && data.slug.size() >= 1 && data.slug.size() <= 260
+        && (!('categoryName' in data) || (data.categoryName is string && data.categoryName.size() <= 120))
+        && data.createdAt is timestamp;
+    }
+
+    function isValidReadingHistory(data) {
+      return data.keys().hasAll(['id', 'userId', 'itemId', 'itemType', 'title', 'slug', 'viewedAt'])
+        && data.keys().hasOnly(['id', 'userId', 'itemId', 'itemType', 'title', 'slug', 'categoryName', 'viewedAt'])
+        && isValidId(data.id)
+        && isValidId(data.userId)
+        && isValidId(data.itemId)
+        && data.itemType in ['article', 'question']
+        && data.title is string && data.title.size() >= 1 && data.title.size() <= 260
+        && data.slug is string && data.slug.size() >= 1 && data.slug.size() <= 260
+        && (!('categoryName' in data) || (data.categoryName is string && data.categoryName.size() <= 120))
+        && data.viewedAt is timestamp;
+    }
+
+    function isValidSettings(data) {
+      return data.keys().hasAll(['updatedAt'])
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidStats(data) {
+      return data.keys().hasAll(['totalVisits', 'updatedAt'])
+        && data.keys().hasOnly(['totalVisits', 'updatedAt'])
+        && data.totalVisits is number && data.totalVisits >= 0
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidPageView(data) {
+      return data.keys().hasAll(['path', 'createdAt'])
+        && data.keys().hasOnly(['path', 'title', 'createdAt'])
+        && data.path is string && data.path.size() >= 1 && data.path.size() <= 300
+        && (!('title' in data) || (data.title is string && data.title.size() <= 260))
+        && data.createdAt is timestamp;
+    }
+
+    function isValidDonation(data) {
+      return data.keys().hasAll(['id', 'receiptNo', 'donorName', 'amount', 'method', 'transactionId', 'status', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'receiptNo', 'donorName', 'amount', 'method', 'transactionId', 'senderLastDigits', 'purpose', 'status', 'submittedByUid', 'verifiedBy', 'verifiedAt', 'createdAt', 'updatedAt'])
+        && isValidId(data.id)
+        && data.receiptNo is string && data.receiptNo.size() >= 4 && data.receiptNo.size() <= 40
+        && data.donorName is string && data.donorName.size() >= 1 && data.donorName.size() <= 120
+        && data.amount is number && data.amount >= 1 && data.amount <= 100000000
+        && data.method in ['bkash', 'nagad', 'rocket', 'bank']
+        && data.transactionId is string && data.transactionId.size() >= 2 && data.transactionId.size() <= 80
+        && (!('senderLastDigits' in data) || (data.senderLastDigits is string && data.senderLastDigits.size() <= 12))
+        && (!('purpose' in data) || (data.purpose is string && data.purpose.size() <= 120))
+        && data.status in ['pending', 'verified', 'rejected']
+        && (!('submittedByUid' in data) || (data.submittedByUid is string && data.submittedByUid.size() <= 128))
+        && (!('verifiedBy' in data) || (data.verifiedBy is string && data.verifiedBy.size() <= 128))
+        && (!('verifiedAt' in data) || data.verifiedAt is timestamp)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidDonationContact(data) {
+      return data.keys().hasAll(['donationId', 'contactInfo', 'createdAt'])
+        && data.keys().hasOnly(['donationId', 'contactInfo', 'submittedByUid', 'createdAt'])
+        && isValidId(data.donationId)
+        && data.contactInfo is string && data.contactInfo.size() >= 1 && data.contactInfo.size() <= 200
+        && (!('submittedByUid' in data) || (data.submittedByUid is string && data.submittedByUid.size() <= 128))
+        && data.createdAt is timestamp;
+    }
+
+    function isValidDua(data) {
+      return data.keys().hasAll(['id', 'occasion', 'occasionLabel', 'title', 'arabic', 'translation', 'reference', 'targetCount', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'occasion', 'occasionLabel', 'title', 'arabic', 'pronunciation', 'translation', 'reference', 'virtue', 'targetCount', 'featured', 'order', 'createdAt', 'updatedAt'])
+        && isValidId(data.id)
+        && data.occasion in ['morning-evening', 'sleep-wake', 'salah-masjid', 'daily-life', 'distress-forgiveness']
+        && data.occasionLabel is string && data.occasionLabel.size() >= 1 && data.occasionLabel.size() <= 100
+        && data.title is string && data.title.size() >= 2 && data.title.size() <= 240
+        && data.arabic is string && data.arabic.size() >= 2 && data.arabic.size() <= 4000
+        && (!('pronunciation' in data) || (data.pronunciation is string && data.pronunciation.size() <= 4000))
+        && data.translation is string && data.translation.size() >= 2 && data.translation.size() <= 4000
+        && data.reference is string && data.reference.size() >= 1 && data.reference.size() <= 500
+        && (!('virtue' in data) || (data.virtue is string && data.virtue.size() <= 2000))
+        && data.targetCount is number && data.targetCount >= 1 && data.targetCount <= 10000
+        && (!('featured' in data) || data.featured is bool)
+        && (!('order' in data) || (data.order is number && data.order >= 0 && data.order <= 10000))
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidMasala(data) {
+      return data.keys().hasAll(['id', 'categoryId', 'categoryName', 'subTopic', 'title', 'summary', 'content', 'order', 'status', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'categoryId', 'categoryName', 'subTopic', 'title', 'summary', 'content', 'authorName', 'arabicReference', 'quranHadithRefs', 'featured', 'order', 'status', 'createdAt', 'updatedAt'])
+        && isValidId(data.id)
+        && isValidId(data.categoryId)
+        && data.categoryName is string && data.categoryName.size() >= 1 && data.categoryName.size() <= 120
+        && data.subTopic is string && data.subTopic.size() >= 1 && data.subTopic.size() <= 120
+        && data.title is string && data.title.size() >= 2 && data.title.size() <= 240
+        && data.summary is string && data.summary.size() >= 1 && data.summary.size() <= 600
+        && data.content is string && data.content.size() >= 10 && data.content.size() <= 30000
+        && (!('authorName' in data) || (data.authorName is string && data.authorName.size() <= 150))
+        && (!('arabicReference' in data) || (data.arabicReference is string && data.arabicReference.size() <= 4000))
+        && (!('quranHadithRefs' in data) || (data.quranHadithRefs is string && data.quranHadithRefs.size() <= 2000))
+        && (!('featured' in data) || data.featured is bool)
+        && data.order is number && data.order >= 0 && data.order <= 10000
+        && data.status in ['published', 'draft']
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    // Connection check doc
+    match /test/connection {
+      allow get: if true;
+    }
+
+    // Users (Private PII)
+    match /users/{userId} {
+      allow get: if isValidId(userId) && (isOwner(userId) || isAdmin());
+      allow list: if isBootstrapSuperAdmin() || isAdmin();
+      allow create: if isValidId(userId)
+        && isSignedIn()
+        && isOwner(userId)
+        && isValidUserProfile(incoming())
+        && incoming().uid == request.auth.uid
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isValidId(userId)
+        && isSignedIn()
+        && isValidUserProfile(incoming())
+        && incoming().uid == existing().uid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          (isOwner(userId) && incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'photoURL', 'bio', 'updatedAt'])) ||
+          isAdmin()
+        );
+      allow delete: if isValidId(userId) && isSuperAdmin();
+
+      match /bookmarks/{bookmarkId} {
+        allow get: if isValidId(userId) && isValidId(bookmarkId) && isOwner(userId);
+        allow list: if isOwner(userId);
+        allow create: if isValidId(userId) && isValidId(bookmarkId)
+          && isOwner(userId)
+          && isValidBookmark(incoming())
+          && incoming().userId == request.auth.uid
+          && incoming().createdAt == request.time;
+        allow delete: if isValidId(userId) && isValidId(bookmarkId) && isOwner(userId);
+      }
+
+      match /reading_history/{historyId} {
+        allow get: if isValidId(userId) && isValidId(historyId) && isOwner(userId);
+        allow list: if isOwner(userId);
+        allow create: if isValidId(userId) && isValidId(historyId)
+          && isOwner(userId)
+          && isValidReadingHistory(incoming())
+          && incoming().userId == request.auth.uid
+          && incoming().viewedAt == request.time;
+        allow update: if isValidId(userId) && isValidId(historyId)
+          && isOwner(userId)
+          && isValidReadingHistory(incoming())
+          && incoming().userId == existing().userId
+          && incoming().viewedAt == request.time
+          && incoming().diff(existing()).affectedKeys().hasOnly(['viewedAt', 'title', 'categoryName']);
+        allow delete: if isValidId(userId) && isValidId(historyId) && isOwner(userId);
+      }
+    }
+
+    // User Roles (RBAC)
+    match /user_roles/{userId} {
+      allow get: if isValidId(userId) && (isOwner(userId) || isAdmin());
+      allow list: if isBootstrapSuperAdmin() || isAdmin();
+      allow create: if isValidId(userId)
+        && isValidUserRole(incoming())
+        && incoming().uid == userId
+        && incoming().updatedAt == request.time
+        && (
+          isSuperAdmin() ||
+          (isAdmin() && incoming().role in ['admin', 'editor', 'user']) ||
+          (isBootstrapSuperAdmin() && isOwner(userId) && incoming().role == 'super_admin') ||
+          (isVerifiedUser() && isOwner(userId) && hasEmailInvite() && incoming().role == getEmailInviteRole())
+        );
+      allow update: if isValidId(userId)
+        && isValidUserRole(incoming())
+        && incoming().uid == existing().uid
+        && incoming().updatedAt == request.time
+        && (
+          isSuperAdmin() ||
+          (isAdmin() && existing().role != 'super_admin' && incoming().role in ['admin', 'editor', 'user']) ||
+          (isVerifiedUser() && isOwner(userId) && hasEmailInvite() && incoming().role == getEmailInviteRole())
+        );
+      allow delete: if isValidId(userId) && isSuperAdmin() && userId != request.auth.uid;
+    }
+
+    // Email-based Admin Invites
+    match /admin_invites/{emailKey} {
+      allow get: if isValidEmailId(emailKey) && (isAdmin() || (isVerifiedUser() && request.auth.token.email == emailKey));
+      allow list: if isBootstrapSuperAdmin() || isAdmin();
+      allow create: if isValidEmailId(emailKey)
+        && isAdmin()
+        && isValidAdminInvite(incoming())
+        && incoming().email == emailKey
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && (incoming().role != 'super_admin' || isSuperAdmin());
+      allow update: if isValidEmailId(emailKey)
+        && isAdmin()
+        && isValidAdminInvite(incoming())
+        && incoming().email == existing().email
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && ((existing().role != 'super_admin' && incoming().role != 'super_admin') || isSuperAdmin());
+      allow delete: if isValidEmailId(emailKey) && isAdmin() && (existing().role != 'super_admin' || isSuperAdmin());
+    }
+
+    // Categories
+    match /categories/{categoryId} {
+      allow get: if isValidId(categoryId);
+      allow list: if true;
+      allow create: if isValidId(categoryId)
+        && isStaff()
+        && isValidCategory(incoming())
+        && incoming().id == categoryId
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isValidId(categoryId)
+        && isStaff()
+        && isValidCategory(incoming())
+        && incoming().id == existing().id
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time;
+      allow delete: if isValidId(categoryId) && isAdmin();
+    }
+
+    // Authors
+    match /authors/{authorId} {
+      allow get: if isValidId(authorId);
+      allow list: if true;
+      allow create: if isValidId(authorId)
+        && isStaff()
+        && isValidAuthor(incoming())
+        && incoming().id == authorId
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isValidId(authorId)
+        && isStaff()
+        && isValidAuthor(incoming())
+        && incoming().id == existing().id
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time;
+      allow delete: if isValidId(authorId) && isAdmin();
+    }
+
+    // Articles
+    match /articles/{articleId} {
+      allow get: if isValidId(articleId) && (existing().status == 'published' || isStaff());
+      allow list: if resource.data.status == 'published' || isBootstrapSuperAdmin() || isStaff();
+      allow create: if isValidId(articleId)
+        && isStaff()
+        && isValidArticle(incoming())
+        && incoming().id == articleId
+        && existsAfter(/databases/$(database)/documents/categories/$(incoming().categoryId))
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isValidId(articleId)
+        && isValidArticle(incoming())
+        && incoming().id == existing().id
+        && incoming().createdAt == existing().createdAt
+        && (
+          (isStaff() && incoming().updatedAt == request.time) ||
+          (
+            existing().status == 'published'
+            && incoming().diff(existing()).affectedKeys().hasOnly(['viewCount'])
+            && incoming().viewCount == existing().viewCount + 1
+          )
+        );
+      allow delete: if isValidId(articleId) && isAdmin();
+    }
+
+    // Questions & Answers
+    match /questions/{questionId} {
+      allow get: if isValidId(questionId) && (existing().status == 'published' || isStaff());
+      allow list: if resource.data.status == 'published' || isBootstrapSuperAdmin() || isStaff();
+      allow create: if isValidId(questionId)
+        && isValidQuestion(incoming())
+        && incoming().id == questionId
+        && existsAfter(/databases/$(database)/documents/categories/$(incoming().categoryId))
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && (
+          isStaff() ||
+          (
+            (!exists(/databases/$(database)/documents/settings/site) || get(/databases/$(database)/documents/settings/site).data.questionSubmissionEnabled == true)
+            && incoming().status == 'pending'
+            && incoming().isFeatured == false
+            && incoming().viewCount == 0
+            && (!('answerText' in incoming()) || incoming().answerText == '')
+            && (!('submittedByUid' in incoming()) || (isSignedIn() && incoming().submittedByUid == request.auth.uid))
+          )
+        );
+      allow update: if isValidId(questionId)
+        && isValidQuestion(incoming())
+        && incoming().id == existing().id
+        && incoming().createdAt == existing().createdAt
+        && (
+          (isStaff() && incoming().updatedAt == request.time) ||
+          (
+            existing().status == 'published'
+            && incoming().diff(existing()).affectedKeys().hasOnly(['viewCount'])
+            && incoming().viewCount == existing().viewCount + 1
+          )
+        );
+      allow delete: if isValidId(questionId) && isAdmin();
+    }
+
+    // Isolated Question Submitter Contacts (PII)
+    match /question_contacts/{questionId} {
+      allow get: if isValidId(questionId) && isStaff();
+      allow list: if isBootstrapSuperAdmin() || isStaff();
+      allow create: if isValidId(questionId)
+        && isValidQuestionContact(incoming())
+        && incoming().questionId == questionId
+        && incoming().createdAt == request.time
+        && existsAfter(/databases/$(database)/documents/questions/$(questionId));
+      allow delete: if isValidId(questionId) && isAdmin();
+    }
+
+    // Dynamic Website, Prayer, Donation & Page Settings
+    match /settings/{settingId} {
+      allow get: if isValidId(settingId) && settingId in ['site', 'prayer', 'donations', 'pages'];
+      allow list: if true;
+      allow create: if isValidId(settingId)
+        && settingId in ['site', 'prayer', 'donations', 'pages']
+        && isAdmin()
+        && isValidSettings(incoming())
+        && incoming().updatedAt == request.time;
+      allow update: if isValidId(settingId)
+        && settingId in ['site', 'prayer', 'donations', 'pages']
+        && isAdmin()
+        && isValidSettings(incoming())
+        && incoming().updatedAt == request.time;
+    }
+
+    // Aggregate Site Stats & Page Views
+    match /stats/{statId} {
+      allow get: if isValidId(statId) && statId == 'overview';
+      allow create: if isValidId(statId)
+        && statId == 'overview'
+        && isAdmin()
+        && isValidStats(incoming())
+        && incoming().updatedAt == request.time;
+      allow update: if isValidId(statId)
+        && statId == 'overview'
+        && isValidStats(incoming())
+        && (
+          (isAdmin() && incoming().updatedAt == request.time) ||
+          (
+            incoming().diff(existing()).affectedKeys().hasOnly(['totalVisits', 'updatedAt'])
+            && incoming().totalVisits == existing().totalVisits + 1
+            && incoming().updatedAt == request.time
+          )
+        );
+    }
+
+    match /page_views/{viewId} {
+      allow get: if isValidId(viewId) && isStaff();
+      allow list: if isBootstrapSuperAdmin() || isStaff();
+      allow create: if isValidId(viewId)
+        && isValidPageView(incoming())
+        && incoming().createdAt == request.time;
+    }
+
+    // Donation Receipts
+    match /donations/{donationId} {
+      allow get: if isValidId(donationId);
+      allow list: if isBootstrapSuperAdmin() || isStaff() || (isSignedIn() && resource.data.submittedByUid == request.auth.uid);
+      allow create: if isValidId(donationId)
+        && isValidDonation(incoming())
+        && incoming().id == donationId
+        && incoming().status == 'pending'
+        && !('verifiedBy' in incoming())
+        && !('verifiedAt' in incoming())
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && (!('submittedByUid' in incoming()) || (isSignedIn() && incoming().submittedByUid == request.auth.uid));
+      allow update: if isValidId(donationId)
+        && isStaff()
+        && isValidDonation(incoming())
+        && incoming().id == existing().id
+        && incoming().receiptNo == existing().receiptNo
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'verifiedBy', 'verifiedAt', 'updatedAt']);
+      allow delete: if isValidId(donationId) && isAdmin();
+    }
+
+    // Isolated Donor Contacts (PII)
+    match /donation_contacts/{donationId} {
+      allow get: if isValidId(donationId) && isStaff();
+      allow list: if isBootstrapSuperAdmin() || isStaff();
+      allow create: if isValidId(donationId)
+        && isValidDonationContact(incoming())
+        && incoming().donationId == donationId
+        && incoming().createdAt == request.time
+        && existsAfter(/databases/$(database)/documents/donations/$(donationId))
+        && (!('submittedByUid' in incoming()) || (isSignedIn() && incoming().submittedByUid == request.auth.uid));
+      allow delete: if isValidId(donationId) && isAdmin();
+    }
+
+    // Authentic Duas & Dhikr
+    match /duas/{duaId} {
+      allow get: if isValidId(duaId);
+      allow list: if true;
+      allow create: if isValidId(duaId)
+        && isStaff()
+        && isValidDua(incoming())
+        && incoming().id == duaId
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isValidId(duaId)
+        && isStaff()
+        && isValidDua(incoming())
+        && incoming().id == existing().id
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time;
+      allow delete: if isValidId(duaId) && isAdmin();
+    }
+
+    // Topic-wise Mas'ala rulings
+    match /masalas/{masalaId} {
+      allow get: if isValidId(masalaId) && (existing().status == 'published' || isStaff());
+      allow list: if resource.data.status == 'published' || isBootstrapSuperAdmin() || isStaff();
+      allow create: if isValidId(masalaId)
+        && isStaff()
+        && isValidMasala(incoming())
+        && incoming().id == masalaId
+        && existsAfter(/databases/$(database)/documents/categories/$(incoming().categoryId))
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isValidId(masalaId)
+        && isStaff()
+        && isValidMasala(incoming())
+        && incoming().id == existing().id
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time;
+      allow delete: if isValidId(masalaId) && isAdmin();
+    }
+  }
+}
