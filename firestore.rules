@@ -562,7 +562,8 @@ service cloud.firestore {
 
     // Donation Receipts
     match /donations/{donationId} {
-      allow get: if isValidId(donationId);
+      allow get: allow get: if isValidId(donationId)
+  && (isStaff() || (isSignedIn() && resource.data.submittedByUid == request.auth.uid));
       allow list: if isBootstrapSuperAdmin() || isStaff() || (isSignedIn() && resource.data.submittedByUid == request.auth.uid);
       allow create: if isValidId(donationId)
         && isValidDonation(incoming())
